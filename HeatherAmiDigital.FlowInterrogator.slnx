@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="HeatherAmiDigital.FlowInterrogator.Core/HeatherAmiDigital.FlowInterrogator.Core.csproj" />
+  <Project Path="HeatherAmiDigital.FlowInterrogator.XrmToolBox/HeatherAmiDigital.FlowInterrogator.XrmToolBox.csproj" />
+</Solution>
