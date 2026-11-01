@@ -1,14 +1,14 @@
 // MainControl.cs
 //
-// The actual screen the user sees once Flow Interrogator is open: a button to load
-// flows, a status label, a grid of flows, and underneath it a read-only box showing the
-// raw JSON definition of whichever flow is currently selected in the grid.
-// FlowInterrogatorPlugin owns this control and hands it a working FlowQueryService once a
-// Dataverse connection exists. This control does not know how to connect to Dataverse
-// itself, only how to use a service once it has one, that split keeps connection handling
-// and screen layout separate.
+// The actual screen the user sees once Flow Interrogator is open: a button to load flows, a
+// grid of flows, and when one is selected, its raw JSON definition on one side and a flattened
+// grid of its triggers/actions on the other. FlowInterrogatorPlugin owns this control and hands
+// it a working FlowQueryService once a Dataverse connection exists. This control does not know
+// how to connect to Dataverse itself, only how to use a service once it has one, that split
+// keeps connection handling and screen layout separate.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Forms;
 using HeatherAmiDigital.FlowInterrogator.Core.Models;
@@ -22,7 +22,9 @@ public sealed class MainControl : UserControl
     private readonly Label _statusLabel;
     private readonly SplitContainer _splitContainer;
     private readonly DataGridView _grid;
+    private readonly SplitContainer _detailSplit;
     private readonly TextBox _definitionBox;
+    private readonly DataGridView _actionsGrid;
 
     private FlowQueryService _queryService;
 
@@ -56,7 +58,7 @@ public sealed class MainControl : UserControl
             Height = 500,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
             Orientation = Orientation.Horizontal,
-            SplitterDistance = 300
+            SplitterDistance = 200
         };
 
         _grid = new DataGridView
@@ -70,6 +72,13 @@ public sealed class MainControl : UserControl
         };
         _grid.SelectionChanged += (s, e) => ShowSelectedFlowDefinition();
 
+        _detailSplit = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            SplitterDistance = 450
+        };
+
         _definitionBox = new TextBox
         {
             Dock = DockStyle.Fill,
@@ -80,8 +89,21 @@ public sealed class MainControl : UserControl
             Font = new System.Drawing.Font("Consolas", 9F)
         };
 
+        _actionsGrid = new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            ReadOnly = true,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect
+        };
+
+        _detailSplit.Panel1.Controls.Add(_definitionBox);
+        _detailSplit.Panel2.Controls.Add(_actionsGrid);
+
         _splitContainer.Panel1.Controls.Add(_grid);
-        _splitContainer.Panel2.Controls.Add(_definitionBox);
+        _splitContainer.Panel2.Controls.Add(_detailSplit);
 
         Controls.Add(_splitContainer);
         Controls.Add(_loadButton);
@@ -118,6 +140,7 @@ public sealed class MainControl : UserControl
         if (_grid.SelectedRows.Count == 0 || _queryService == null)
         {
             _definitionBox.Text = string.Empty;
+            _actionsGrid.DataSource = null;
             return;
         }
 
@@ -125,16 +148,47 @@ public sealed class MainControl : UserControl
         if (flow == null)
         {
             _definitionBox.Text = string.Empty;
+            _actionsGrid.DataSource = null;
             return;
         }
 
         try
         {
-            _definitionBox.Text = _queryService.GetFlowDefinitionJson(flow.Id);
+            var definition = _queryService.GetFlowDefinition(flow.Id);
+            _definitionBox.Text = definition.RawJson?.ToString() ?? string.Empty;
+            _actionsGrid.DataSource = BuildActionRows(definition);
         }
         catch (Exception ex)
         {
             _definitionBox.Text = $"Failed to load definition:{Environment.NewLine}{ex.Message}";
+            _actionsGrid.DataSource = null;
         }
+    }
+
+    private static List<FlowActionRow> BuildActionRows(FlowDefinition definition)
+    {
+        var rows = new List<FlowActionRow>();
+
+        foreach (var trigger in definition.Triggers.Values)
+        {
+            rows.Add(new FlowActionRow { Category = "Trigger", Name = trigger.Name, Type = trigger.Type, Kind = trigger.Kind });
+        }
+
+        foreach (var action in definition.Actions.Values)
+        {
+            rows.Add(new FlowActionRow { Category = "Action", Name = action.Name, Type = action.Type, Kind = action.Kind });
+        }
+
+        return rows;
+    }
+
+    // A flat row for the actions grid. This is a UI-only shape, not a domain concept, so it
+    // lives here rather than in Core alongside FlowTrigger/FlowAction.
+    private sealed class FlowActionRow
+    {
+        public string Category { get; set; }
+        public string Name { get; set; }
+        public string Type { get; set; }
+        public string Kind { get; set; }
     }
 }
