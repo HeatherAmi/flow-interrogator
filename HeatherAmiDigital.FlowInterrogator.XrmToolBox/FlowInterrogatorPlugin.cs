@@ -51,7 +51,7 @@ public sealed class FlowInterrogatorPlugin : PluginControlBase
     {
         base.UpdateConnection(newService, detail, actionName, parameter);
 
-        var queryService = new FlowQueryService(Service);
+        var queryService = new FlowQueryService(Service, new FlowParser());
         _mainControl.SetQueryService(queryService);
     }
 }

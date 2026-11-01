@@ -1,10 +1,10 @@
 // FlowQueryService.cs
 //
-// Talks to Dataverse directly to get the list of cloud flows. A flow is stored as a
-// row in the standard workflow table, filtered to category 5 (a modern cloud flow, not
-// a classic workflow or business rule) and type 1 (the actual flow, not the separate
-// activation or template rows Dataverse also keeps for each one, those would otherwise
-// make every flow appear two or three times in the list).
+// Talks to Dataverse directly to get the list of cloud flows and the full definition of any
+// single one. A flow is stored as a row in the standard workflow table, filtered to category 5
+// (a modern cloud flow, not a classic workflow or business rule) and type 1 (the actual flow,
+// not the separate activation or template rows Dataverse also keeps for each one, those would
+// otherwise make every flow appear two or three times in the list).
 
 using System;
 using System.Collections.Generic;
@@ -12,19 +12,18 @@ using System.Linq;
 using HeatherAmiDigital.FlowInterrogator.Core.Models;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Query;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-
 
 namespace HeatherAmiDigital.FlowInterrogator.Core.Services;
 
 public sealed class FlowQueryService
 {
     private readonly IOrganizationService _service;
+    private readonly FlowParser _parser;
 
-    public FlowQueryService(IOrganizationService service)
+    public FlowQueryService(IOrganizationService service, FlowParser parser)
     {
         _service = service ?? throw new ArgumentNullException(nameof(service));
+        _parser = parser ?? throw new ArgumentNullException(nameof(parser));
     }
 
     public IReadOnlyList<FlowSummary> GetFlowSummaries()
@@ -46,6 +45,14 @@ public sealed class FlowQueryService
             .ToList();
     }
 
+    public FlowDefinition GetFlowDefinition(Guid flowId)
+    {
+        var entity = _service.Retrieve("workflow", flowId, new ColumnSet("clientdata"));
+        var rawJson = entity.GetAttributeValue<string>("clientdata");
+
+        return _parser.ParseDefinition(flowId, rawJson);
+    }
+
     private static FlowSummary MapToSummary(Entity entity)
     {
         return new FlowSummary
@@ -59,24 +66,4 @@ public sealed class FlowQueryService
             OwnerName = entity.GetAttributeValue<EntityReference>("ownerid")?.Name
         };
     }
-        public string GetFlowDefinitionJson(Guid flowId)
-    {
-        var entity = _service.Retrieve("workflow", flowId, new ColumnSet("clientdata"));
-        var rawJson = entity.GetAttributeValue<string>("clientdata");
-
-        if (string.IsNullOrWhiteSpace(rawJson))
-        {
-            return "(this flow has no saved definition)";
-        }
-
-        try
-        {
-            return JToken.Parse(rawJson).ToString(Formatting.Indented);
-        }
-        catch (JsonReaderException)
-        {
-            return rawJson;
-        }
-    }
-
 }
