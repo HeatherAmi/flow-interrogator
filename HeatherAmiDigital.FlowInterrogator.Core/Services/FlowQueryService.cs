@@ -12,6 +12,9 @@ using System.Linq;
 using HeatherAmiDigital.FlowInterrogator.Core.Models;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Query;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
 
 namespace HeatherAmiDigital.FlowInterrogator.Core.Services;
 
@@ -56,4 +59,24 @@ public sealed class FlowQueryService
             OwnerName = entity.GetAttributeValue<EntityReference>("ownerid")?.Name
         };
     }
+        public string GetFlowDefinitionJson(Guid flowId)
+    {
+        var entity = _service.Retrieve("workflow", flowId, new ColumnSet("clientdata"));
+        var rawJson = entity.GetAttributeValue<string>("clientdata");
+
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            return "(this flow has no saved definition)";
+        }
+
+        try
+        {
+            return JToken.Parse(rawJson).ToString(Formatting.Indented);
+        }
+        catch (JsonReaderException)
+        {
+            return rawJson;
+        }
+    }
+
 }
