@@ -19,15 +19,36 @@
        never looks at this project's own build output. Without this step, every build sits
        in bin/ invisible to XrmToolBox until someone copies it over by hand. $(AppData) is an
        MSBuild property that resolves to the current Windows user's AppData\Roaming folder, so
-       this works for anyone building the project, not just on this machine. -->
+       this works for anyone building the project, not just on this machine.
+
+       Two different copy rules, because overwriting is only safe for files we own:
+         - Our own two assemblies always get overwritten, so a rebuild is always what
+           XrmToolBox actually loads next time it opens.
+         - Every other DLL in the build output (third-party dependencies NuGet pulled in,
+           e.g. Microsoft.Identity.Client) only gets copied if XrmToolBox doesn't already have
+           a file with that name. That way a build can never silently overwrite a DLL XrmToolBox
+           itself ships with a different, possibly incompatible version of the same file — which
+           is exactly what went wrong with Newtonsoft.Json earlier. A genuinely new dependency
+           (one the host has no copy of at all) still gets added automatically. -->
   <Target Name="CopyToXrmToolBoxPlugins" AfterTargets="Build">
+    <PropertyGroup>
+      <XrmToolBoxPluginsDir>$(AppData)\MscrmTools\XrmToolBox\Plugins\</XrmToolBoxPluginsDir>
+    </PropertyGroup>
+
     <ItemGroup>
-      <PluginOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.XrmToolBox.dll" />
-      <PluginOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.XrmToolBox.pdb" />
-      <PluginOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.Core.dll" />
-      <PluginOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.Core.pdb" />
+      <OwnOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.XrmToolBox.dll" />
+      <OwnOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.XrmToolBox.pdb" />
+      <OwnOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.Core.dll" />
+      <OwnOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.Core.pdb" />
     </ItemGroup>
-    <Copy SourceFiles="@(PluginOutputFiles)" DestinationFolder="$(AppData)\MscrmTools\XrmToolBox\Plugins" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(OwnOutputFiles)" DestinationFolder="$(XrmToolBoxPluginsDir)" SkipUnchangedFiles="true" />
+
+    <ItemGroup>
+      <OtherOutputDlls Include="$(OutDir)*.dll" Exclude="@(OwnOutputFiles)" />
+    </ItemGroup>
+    <Copy SourceFiles="@(OtherOutputDlls)"
+          DestinationFolder="$(XrmToolBoxPluginsDir)"
+          Condition="!Exists('$(XrmToolBoxPluginsDir)%(OtherOutputDlls.Filename)%(OtherOutputDlls.Extension)')" />
   </Target>
 
 </Project>

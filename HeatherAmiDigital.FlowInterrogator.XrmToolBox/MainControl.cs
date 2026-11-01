@@ -1,16 +1,19 @@
 // MainControl.cs
 //
-// The actual screen the user sees once Flow Interrogator is open: a button to load flows, a
-// search box that finds a term across every flow's definition, a grid that shows either the
-// full flow list or search results (selecting a row either way drives the detail panes), the
-// selected flow's raw JSON, and a flattened grid of its triggers/actions. FlowInterrogatorPlugin
-// owns this control and hands it a working FlowQueryService once a Dataverse connection exists.
-// This control does not know how to connect to Dataverse itself, only how to use a service once
-// it has one, that split keeps connection handling and screen layout separate.
+// The actual screen the user sees once Flow Interrogator is open, split into two tabs. The
+// Flows tab: a button to load flows, a search box that finds a term across every flow's
+// definition, a grid (showing either the full flow list or search results), the selected
+// flow's raw JSON, and a flattened grid of its triggers/actions. The Run History tab: loads
+// the run history for whichever flow is currently selected on the Flows tab, signing in to the
+// separate Power Automate Management API (via MSAL, a system browser popup) the first time
+// it's needed. FlowInterrogatorPlugin owns this control and hands it working services once a
+// Dataverse connection exists; this control does not know how to connect to either service
+// itself, only how to use them once it has them.
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using HeatherAmiDigital.FlowInterrogator.Core.Models;
 using HeatherAmiDigital.FlowInterrogator.Core.Services;
@@ -19,6 +22,9 @@ namespace HeatherAmiDigital.FlowInterrogator.XrmToolBox;
 
 public sealed class MainControl : UserControl
 {
+    private readonly TabControl _tabs;
+
+    // Flows tab
     private readonly Button _loadButton;
     private readonly Label _statusLabel;
     private readonly TextBox _searchBox;
@@ -30,8 +36,16 @@ public sealed class MainControl : UserControl
     private readonly TextBox _definitionBox;
     private readonly DataGridView _actionsGrid;
 
+    // Run History tab
+    private readonly Button _loadRunHistoryButton;
+    private readonly Label _runHistoryStatusLabel;
+    private readonly DataGridView _runHistoryGrid;
+
     private FlowQueryService _queryService;
+    private FlowRunService _runService;
     private IReadOnlyList<FlowSummary> _allFlows = Array.Empty<FlowSummary>();
+    private Guid? _selectedFlowId;
+    private string _selectedFlowName;
 
     public MainControl()
     {
@@ -142,19 +156,68 @@ public sealed class MainControl : UserControl
         _splitContainer.Panel1.Controls.Add(_grid);
         _splitContainer.Panel2.Controls.Add(_detailSplit);
 
-        Controls.Add(_splitContainer);
-        Controls.Add(_resetButton);
-        Controls.Add(_searchButton);
-        Controls.Add(_searchBox);
-        Controls.Add(_loadButton);
-        Controls.Add(_statusLabel);
+        var flowsPanel = new Panel { Dock = DockStyle.Fill };
+        flowsPanel.Controls.Add(_splitContainer);
+        flowsPanel.Controls.Add(_resetButton);
+        flowsPanel.Controls.Add(_searchButton);
+        flowsPanel.Controls.Add(_searchBox);
+        flowsPanel.Controls.Add(_loadButton);
+        flowsPanel.Controls.Add(_statusLabel);
+
+        _loadRunHistoryButton = new Button
+        {
+            Text = "Load run history",
+            Top = 10,
+            Left = 10,
+            Width = 140
+        };
+        _loadRunHistoryButton.Click += async (s, e) => await LoadRunHistoryAsync();
+
+        _runHistoryStatusLabel = new Label
+        {
+            Top = 15,
+            Left = 160,
+            AutoSize = true,
+            Text = "Select a flow on the Flows tab first"
+        };
+
+        _runHistoryGrid = new DataGridView
+        {
+            Top = 45,
+            Left = 10,
+            Width = 900,
+            Height = 500,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+            ReadOnly = true,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect
+        };
+
+        var runHistoryPanel = new Panel { Dock = DockStyle.Fill };
+        runHistoryPanel.Controls.Add(_runHistoryGrid);
+        runHistoryPanel.Controls.Add(_loadRunHistoryButton);
+        runHistoryPanel.Controls.Add(_runHistoryStatusLabel);
+
+        var flowsTab = new TabPage("Flows");
+        flowsTab.Controls.Add(flowsPanel);
+
+        var runHistoryTab = new TabPage("Run History");
+        runHistoryTab.Controls.Add(runHistoryPanel);
+
+        _tabs = new TabControl { Dock = DockStyle.Fill };
+        _tabs.TabPages.AddRange(new[] { flowsTab, runHistoryTab });
+
+        Controls.Add(_tabs);
 
         Load += (s, e) => _detailSplit.SplitterDistance = _detailSplit.Width / 2;
     }
 
-    public void SetQueryService(FlowQueryService queryService)
+    public void SetServices(FlowQueryService queryService, FlowRunService runService)
     {
         _queryService = queryService;
+        _runService = runService;
         _loadButton.Enabled = queryService != null;
         _statusLabel.Text = queryService != null ? "Connected" : "Not connected";
     }
@@ -220,18 +283,25 @@ public sealed class MainControl : UserControl
         }
 
         Guid flowId;
+        string flowName;
         switch (_grid.SelectedRows[0].DataBoundItem)
         {
             case FlowSummary summary:
                 flowId = summary.Id;
+                flowName = summary.Name;
                 break;
             case FlowMatch match:
                 flowId = match.FlowId;
+                flowName = match.FlowName;
                 break;
             default:
                 ClearDetail();
                 return;
         }
+
+        _selectedFlowId = flowId;
+        _selectedFlowName = flowName;
+        _runHistoryStatusLabel.Text = $"Ready to load run history for '{flowName}'";
 
         try
         {
@@ -255,8 +325,32 @@ public sealed class MainControl : UserControl
 
     private void ClearDetail()
     {
+        _selectedFlowId = null;
+        _selectedFlowName = null;
         _definitionBox.Text = string.Empty;
         _actionsGrid.DataSource = null;
+    }
+
+    private async Task LoadRunHistoryAsync()
+    {
+        if (_runService == null || _selectedFlowId == null)
+        {
+            _runHistoryStatusLabel.Text = "Select a flow on the Flows tab first";
+            return;
+        }
+
+        try
+        {
+            _runHistoryStatusLabel.Text = "Loading run history (sign in if prompted)...";
+            var runs = await _runService.GetRunsAsync(_selectedFlowId.Value, _selectedFlowName);
+            _runHistoryGrid.DataSource = runs.ToList();
+            _runHistoryStatusLabel.Text = $"{runs.Count} run(s) for '{_selectedFlowName}'";
+        }
+        catch (Exception ex)
+        {
+            _runHistoryStatusLabel.Text = "Failed to load run history";
+            MessageBox.Show(ex.Message, "Flow Interrogator", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private static List<FlowActionRow> BuildActionRows(FlowDefinition definition)
