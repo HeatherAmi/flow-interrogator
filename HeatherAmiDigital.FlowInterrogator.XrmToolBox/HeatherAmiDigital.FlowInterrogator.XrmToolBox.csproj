@@ -9,11 +9,25 @@
     <PackageReference Include="XrmToolBoxPackage" Version="1.2025.10.74" />
   </ItemGroup>
 
- <PropertyGroup>
-  <TargetFramework>net48</TargetFramework>
-  <LangVersion>latest</LangVersion>
-  <UseWindowsForms>true</UseWindowsForms>
-</PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
 
+  <!-- XrmToolBox only ever loads plugins from its own Plugins folder under %AppData%, it
+       never looks at this project's own build output. Without this step, every build sits
+       in bin/ invisible to XrmToolBox until someone copies it over by hand. $(AppData) is an
+       MSBuild property that resolves to the current Windows user's AppData\Roaming folder, so
+       this works for anyone building the project, not just on this machine. -->
+  <Target Name="CopyToXrmToolBoxPlugins" AfterTargets="Build">
+    <ItemGroup>
+      <PluginOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.XrmToolBox.dll" />
+      <PluginOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.XrmToolBox.pdb" />
+      <PluginOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.Core.dll" />
+      <PluginOutputFiles Include="$(OutDir)HeatherAmiDigital.FlowInterrogator.Core.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PluginOutputFiles)" DestinationFolder="$(AppData)\MscrmTools\XrmToolBox\Plugins" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>
