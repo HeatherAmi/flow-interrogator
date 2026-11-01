@@ -1,11 +1,12 @@
 // MainControl.cs
 //
 // The actual screen the user sees once Flow Interrogator is open: a button to load flows, a
-// grid of flows, and when one is selected, its raw JSON definition on one side and a flattened
-// grid of its triggers/actions on the other. FlowInterrogatorPlugin owns this control and hands
-// it a working FlowQueryService once a Dataverse connection exists. This control does not know
-// how to connect to Dataverse itself, only how to use a service once it has one, that split
-// keeps connection handling and screen layout separate.
+// search box that finds a term across every flow's definition, a grid that shows either the
+// full flow list or search results (selecting a row either way drives the detail panes), the
+// selected flow's raw JSON, and a flattened grid of its triggers/actions. FlowInterrogatorPlugin
+// owns this control and hands it a working FlowQueryService once a Dataverse connection exists.
+// This control does not know how to connect to Dataverse itself, only how to use a service once
+// it has one, that split keeps connection handling and screen layout separate.
 
 using System;
 using System.Collections.Generic;
@@ -20,6 +21,9 @@ public sealed class MainControl : UserControl
 {
     private readonly Button _loadButton;
     private readonly Label _statusLabel;
+    private readonly TextBox _searchBox;
+    private readonly Button _searchButton;
+    private readonly Button _resetButton;
     private readonly SplitContainer _splitContainer;
     private readonly DataGridView _grid;
     private readonly SplitContainer _detailSplit;
@@ -27,6 +31,7 @@ public sealed class MainControl : UserControl
     private readonly DataGridView _actionsGrid;
 
     private FlowQueryService _queryService;
+    private IReadOnlyList<FlowSummary> _allFlows = Array.Empty<FlowSummary>();
 
     public MainControl()
     {
@@ -50,9 +55,42 @@ public sealed class MainControl : UserControl
             Text = "Not connected"
         };
 
-        _splitContainer = new SplitContainer
+        _searchBox = new TextBox
         {
             Top = 45,
+            Left = 10,
+            Width = 300
+        };
+        _searchBox.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                SearchDefinitions();
+            }
+        };
+
+        _searchButton = new Button
+        {
+            Text = "Search definitions",
+            Top = 43,
+            Left = 320,
+            Width = 140
+        };
+        _searchButton.Click += (s, e) => SearchDefinitions();
+
+        _resetButton = new Button
+        {
+            Text = "Reset",
+            Top = 43,
+            Left = 470,
+            Width = 80
+        };
+        _resetButton.Click += (s, e) => ResetSearch();
+
+        _splitContainer = new SplitContainer
+        {
+            Top = 80,
             Left = 10,
             Width = 900,
             Height = 500,
@@ -105,11 +143,13 @@ public sealed class MainControl : UserControl
         _splitContainer.Panel2.Controls.Add(_detailSplit);
 
         Controls.Add(_splitContainer);
+        Controls.Add(_resetButton);
+        Controls.Add(_searchButton);
+        Controls.Add(_searchBox);
         Controls.Add(_loadButton);
         Controls.Add(_statusLabel);
 
         Load += (s, e) => _detailSplit.SplitterDistance = _detailSplit.Width / 2;
-
     }
 
     public void SetQueryService(FlowQueryService queryService)
@@ -126,9 +166,9 @@ public sealed class MainControl : UserControl
         try
         {
             _statusLabel.Text = "Loading...";
-            var flows = _queryService.GetFlowSummaries().ToList();
-            _grid.DataSource = flows;
-            _statusLabel.Text = $"{flows.Count} flow(s) loaded";
+            _allFlows = _queryService.GetFlowSummaries();
+            _grid.DataSource = _allFlows.ToList();
+            _statusLabel.Text = $"{_allFlows.Count} flow(s) loaded";
         }
         catch (Exception ex)
         {
@@ -137,26 +177,72 @@ public sealed class MainControl : UserControl
         }
     }
 
+    private void SearchDefinitions()
+    {
+        if (_queryService == null || string.IsNullOrWhiteSpace(_searchBox.Text)) return;
+
+        try
+        {
+            _statusLabel.Text = $"Searching for '{_searchBox.Text}'...";
+            var matches = _queryService.SearchFlowDefinitions(_searchBox.Text);
+            _grid.DataSource = matches.ToList();
+            HideColumn("FlowId");
+            _statusLabel.Text = $"Found {matches.Count} match(es) for '{_searchBox.Text}'";
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = "Search failed";
+            MessageBox.Show(ex.Message, "Flow Interrogator", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ResetSearch()
+    {
+        _searchBox.Clear();
+        _grid.DataSource = _allFlows.ToList();
+        _statusLabel.Text = $"{_allFlows.Count} flow(s) loaded";
+    }
+
+    private void HideColumn(string columnName)
+    {
+        if (_grid.Columns.Contains(columnName))
+        {
+            _grid.Columns[columnName].Visible = false;
+        }
+    }
+
     private void ShowSelectedFlowDefinition()
     {
         if (_grid.SelectedRows.Count == 0 || _queryService == null)
         {
-            _definitionBox.Text = string.Empty;
-            _actionsGrid.DataSource = null;
+            ClearDetail();
             return;
         }
 
-        var flow = _grid.SelectedRows[0].DataBoundItem as FlowSummary;
-        if (flow == null)
+        Guid flowId;
+        switch (_grid.SelectedRows[0].DataBoundItem)
         {
-            _definitionBox.Text = string.Empty;
-            _actionsGrid.DataSource = null;
-            return;
+            case FlowSummary summary:
+                flowId = summary.Id;
+                break;
+            case FlowMatch match:
+                flowId = match.FlowId;
+                break;
+            default:
+                ClearDetail();
+                return;
         }
 
         try
         {
-            var definition = _queryService.GetFlowDefinition(flow.Id);
+            var definition = _queryService.GetFlowDefinition(flowId);
+            if (definition == null)
+            {
+                _definitionBox.Text = "This flow no longer exists in Dataverse.";
+                _actionsGrid.DataSource = null;
+                return;
+            }
+
             _definitionBox.Text = definition.RawJson?.ToString() ?? string.Empty;
             _actionsGrid.DataSource = BuildActionRows(definition);
         }
@@ -165,6 +251,12 @@ public sealed class MainControl : UserControl
             _definitionBox.Text = $"Failed to load definition:{Environment.NewLine}{ex.Message}";
             _actionsGrid.DataSource = null;
         }
+    }
+
+    private void ClearDetail()
+    {
+        _definitionBox.Text = string.Empty;
+        _actionsGrid.DataSource = null;
     }
 
     private static List<FlowActionRow> BuildActionRows(FlowDefinition definition)
