@@ -75,8 +75,7 @@ public sealed class MainControl : UserControl
         _detailSplit = new SplitContainer
         {
             Dock = DockStyle.Fill,
-            Orientation = Orientation.Vertical,
-            SplitterDistance = 450
+            Orientation = Orientation.Vertical
         };
 
         _definitionBox = new TextBox
@@ -108,6 +107,9 @@ public sealed class MainControl : UserControl
         Controls.Add(_splitContainer);
         Controls.Add(_loadButton);
         Controls.Add(_statusLabel);
+
+        Load += (s, e) => _detailSplit.SplitterDistance = _detailSplit.Width / 2;
+
     }
 
     public void SetQueryService(FlowQueryService queryService)
